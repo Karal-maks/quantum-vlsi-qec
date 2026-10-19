@@ -1,0 +1,9 @@
+*.vcd
+*.wdb
+*.jou
+*.log
+*.vvp
+.Xil/
+xsim.dir/
+__pycache__/
+*.pyc
