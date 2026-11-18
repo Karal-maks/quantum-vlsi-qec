@@ -1,21 +1,21 @@
 import numpy as np
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit_aer import AerSimulator
+from itertools import product
 
 def build_reversible_peres_adder(qc, a, b, cin, cout, s):
     """
-    Peres Full-Adder gate decomposition:
-    Minimizes quantum cost (T-depth and CNOT count) compared to standard Toffoli networks.
+    Full adder from two Peres gates. Each Peres gate is a Toffoli followed by a CNOT.
     """
-    # Peres Gate 1: Half-adder on (A, B)
-    qc.cx(a, b)
+    # Peres gate 1 on (A, B, Cout): Cout = A&B, B = A^B
     qc.ccx(a, b, cout)
+    qc.cx(a, b)
 
-    # Peres Gate 2: Incorporate Carry-in (Cin)
-    qc.cx(cin, b)
+    # Peres gate 2 on (Cin, B, Cout): Cout ^= Cin&(A^B), B = A^B^Cin
     qc.ccx(cin, b, cout)
+    qc.cx(cin, b)
 
-    # Sum output is preserved on qubit S
+    # B now holds the sum, so copy it to the Sum qubit
     qc.cx(b, s)
 
 def construct_fault_tolerant_alu(a_val: int, b_val: int, cin_val: int, error_target: int = 1):
@@ -71,10 +71,40 @@ def construct_fault_tolerant_alu(a_val: int, b_val: int, cin_val: int, error_tar
 
     return qc
 
+def run_case(sim, a, b, cin, err, shots=1):
+    """Run one circuit. Returns (cout, raw_sum, syndrome_string)."""
+    qc = construct_fault_tolerant_alu(a, b, cin, error_target=err)
+    counts = sim.run(qc, shots=shots).result().get_counts()
+    outcome = max(counts, key=counts.get)
+    res_raw, syndrome = outcome.split(" ")   # "Cout Sum", "S1 S0"
+    return int(res_raw[0]), int(res_raw[1]), syndrome
+
+
+def decode(raw_sum, syndrome):
+    """Python model of vlsi/syndrome_decoder.v: only syndrome 01 flips the sum."""
+    return 1 - raw_sum if syndrome == "01" else raw_sum
+
+
+EXPECTED_SYNDROME = {0: "00", 1: "01", 2: "11", 3: "10"}
+
+
+def verify_all(sim):
+    """Check every input (A, B, Cin) against every fault location: 8 x 4 = 32 cases."""
+    for a, b, cin in product([0, 1], repeat=3):
+        for err in range(4):
+            cout, raw_sum, syndrome = run_case(sim, a, b, cin, err)
+            total = a + b + cin
+            case = f"(A={a}, B={b}, Cin={cin}, err={err})"
+            assert cout == total // 2, f"Cout wrong {case}"
+            assert syndrome == EXPECTED_SYNDROME[err], f"Syndrome wrong {case}"
+            assert decode(raw_sum, syndrome) == total % 2, f"Sum wrong {case}"
+    print("All 32 cases passed")
+
+
 if __name__ == "__main__":
     sim = AerSimulator()
-    print("=== QUANTUM FAULT-TOLERANT ALU SIMULATION ===")
-    
+    print("=== QUANTUM ALU WITH 3-QUBIT BIT-FLIP CODE ===")
+
     test_cases = [
         {"desc": "Normal (No Noise)",     "a": 1, "b": 1, "cin": 0, "err": 0},
         {"desc": "Bit-Flip on Primary",   "a": 1, "b": 1, "cin": 0, "err": 1},
@@ -83,12 +113,11 @@ if __name__ == "__main__":
     ]
 
     for tc in test_cases:
-        circuit = construct_fault_tolerant_alu(tc["a"], tc["b"], tc["cin"], error_target=tc["err"])
-        counts = sim.run(circuit, shots=1024).result().get_counts()
-        most_frequent = max(counts, key=counts.get)
-        # Output format: "res_out s_out"
-        tokens = most_frequent.split(" ")
-        res_raw, syndrome = tokens[0], tokens[1]
-        
+        cout, raw_sum, syndrome = run_case(sim, tc["a"], tc["b"], tc["cin"], tc["err"], shots=1024)
+        corrected = decode(raw_sum, syndrome)
         print(f"[{tc['desc']}] Inputs (A={tc['a']}, B={tc['b']}, Cin={tc['cin']}) -> "
-              f"Measured Raw [Cout,Sum]: {res_raw} | Stabilizer Syndrome (S1,S0): {syndrome}")
+              f"Raw [Cout,Sum]: {cout}{raw_sum} | Syndrome (S1,S0): {syndrome} | "
+              f"Corrected Sum: {corrected}")
+
+    print()
+    verify_all(sim)
