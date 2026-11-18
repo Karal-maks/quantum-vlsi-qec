@@ -1,82 +1,70 @@
-# Fault-Tolerant Reversible Quantum ALU with Synthesizable Verilog Decoder
+# Reversible Quantum Full Adder with 3-Qubit Bit-Flip Code and Verilog Syndrome Decoder
 
-A hybrid quantum-classical computing architecture combining a reversible Peres-gate full adder in Qiskit, a 3-qubit quantum error correction (QEC) repetition code, and a cycle-accurate synthesizable Verilog decoder for single-cycle bit-flip repair on FPGA.
+A hybrid quantum-classical demo: a reversible Peres-gate full adder in Qiskit,
+a 3-qubit repetition code protecting the sum bit against single bit-flip errors,
+and a synthesizable Verilog decoder that corrects the sum from the measured syndrome.
 
----
+## Pipeline
 
-## System Co-Design Pipeline
+```
+[A, B, Cin] -> [Reversible Peres full adder] -> [Sum, Cout]
+                         |
+        [3-qubit repetition encoding of Sum]
+                         |
+        [Single bit-flip fault injection (X gate)]
+                         |
+        [Stabilizer checks: Z0Z1, Z1Z2] -> syndrome {S1, S0}
+                         |
+        [Verilog syndrome decoder (registered output)]
+                         |
+                [Corrected Sum]
+```
 
-\\\	ext
-[ Data Inputs: A, B, Cin ] --? [ Reversible Peres ALU ]
-                                      ¦
-                         [ 3-Qubit Repetition Encoding ]
-                                      ¦
-                         [ Depolarizing / Bit-Flip Noise ]
-                                      ¦
-                         [ Stabilizer Check: Z0Z1, Z1Z2 ]
-                                      ¦
-                                      ?
-                           Syndrome Bits [S1, S0]
-                                      ¦
-                                      ?
-                         [ Synthesizable Verilog RTL ]
-                                      ¦
-                         [ Error-Corrected Logical Sum ]
-\\\
+## Syndrome decoding
 
----
+| Fault location | Syndrome {S1,S0} | Decoder action | error_location |
+| :--- | :--- | :--- | :--- |
+| None | 2'b00 | Pass raw sum | 2'b00 |
+| Qubit 0 (sum qubit) | 2'b01 | Invert raw sum | 2'b01 |
+| Qubit 1 (ancilla 1) | 2'b11 | Pass raw sum | 2'b10 |
+| Qubit 2 (ancilla 2) | 2'b10 | Pass raw sum | 2'b11 |
 
-## Stabilizer Syndrome Decoding Logic
+## Repository structure
 
-The FPGA co-processor decodes stabilizer measurements (\ Z_1\$ and \ Z_2\$) to detect which physical qubit suffered decoherence without destroying the underlying quantum state:
+```
+quantum/circuit_quantum_alu.py   Qiskit adder, encoding, fault injection, syndrome extraction
+vlsi/syndrome_decoder.v          Verilog decoder (async active-low reset, registered outputs)
+vlsi/tb_decoder.v                Self-checking testbench
+```
 
-| Stabilizer Condition | Syndrome \[S1, S0]\ | Fault Location | Classical RTL Decoder Action | Corrected Logical Sum |
-| :--- | :--- | :--- | :--- | :--- |
-| **No Injected Noise** | \2'b00\ | None | Pass raw measured qubit | Intact |
-| **Primary Qubit Error** | \2'b01\ | Qubit 0 (\\$) | Invert corrupted bit (\~raw_sum\) | **Repaired** |
-| **Ancilla 1 Error** | \2'b11\ | Ancilla 1 (\\$) | Pass raw measured qubit | Intact |
-| **Ancilla 2 Error** | \2'b10\ | Ancilla 2 (\\$) | Pass raw measured qubit | Intact |
+## Run
 
----
+[Vivado / EDA Playground / Icarus Verilog] with EDA Playground (Icarus Verilog)
 
-## Simulation Waveform & Timing
+```
+python quantum/circuit_quantum_alu.py
+```
 
-\\\	ext
-Time (ns)       0        10        20        30        40        50
-clk          ___/???\___/???\___/???\___/???\___/???\___/???\___/???\___
-rst_n        ___________/???????????????????????????????????????????????
-syndrome     XXXXXXXXXXX(  2'b00  )(  2'b01  )(  2'b11  )XXXXXXXXXXXXX
-raw_sum      XXXXXXXXXXX(   1'b0  )(   1'b1  )(   1'b0  )XXXXXXXXXXXXX
-                        ?          ?          ?
-                        ¦          ¦          +-- Ancilla error (Flag=1, Sum=0)
-                        ¦          +------------- Bit-flip repaired (Flag=1, Sum: 1->0)
-                        +------------------------ Clean execution (Flag=0, Sum=0)
+**Verilog simulation:** load both files from `vlsi/` into [Vivado / EDA Playground / Icarus Verilog].
+The testbench prints PASS/FAIL per case and `ALL TESTS PASSED` at the end.
 
-corrected_sum ____________(   1'b0  )__________(   1'b0  )____________
-correction_flg ____________________/?????????????????????\_____________
-\\\
+## Results
+```
+=== QUANTUM ALU WITH 3-QUBIT BIT-FLIP CODE ===
+[Normal (No Noise)] Inputs (A=1, B=1, Cin=0) -> Raw [Cout,Sum]: 10 | Syndrome (S1,S0): 00 | Corrected Sum: 0
+[Bit-Flip on Primary] Inputs (A=1, B=1, Cin=0) -> Raw [Cout,Sum]: 11 | Syndrome (S1,S0): 01 | Corrected Sum: 0
+[Bit-Flip on Ancilla 1] Inputs (A=1, B=1, Cin=0) -> Raw [Cout,Sum]: 10 | Syndrome (S1,S0): 11 | Corrected Sum: 0
+[Bit-Flip on Ancilla 2] Inputs (A=1, B=1, Cin=0) -> Raw [Cout,Sum]: 10 | Syndrome (S1,S0): 10 | Corrected Sum: 0
 
----
+All 32 cases passed
+```
 
-## Simulation Verification Output
+![Decoder waveform](docs/waveform.png)
 
-### Quantum Aer Simulator (Python / Qiskit)
-\\\	ext
-=== QUANTUM FAULT-TOLERANT ALU SIMULATION ===
-[Normal (No Noise)]     Inputs (A=1, B=1, Cin=0) -> Measured Raw [Cout,Sum]: 10 | Stabilizer Syndrome (S1,S0): 00
-[Bit-Flip on Primary]   Inputs (A=1, B=1, Cin=0) -> Measured Raw [Cout,Sum]: 11 | Stabilizer Syndrome (S1,S0): 01
-[Bit-Flip on Ancilla 1] Inputs (A=1, B=1, Cin=0) -> Measured Raw [Cout,Sum]: 10 | Stabilizer Syndrome (S1,S0): 11
-[Bit-Flip on Ancilla 2] Inputs (A=1, B=1, Cin=0) -> Measured Raw [Cout,Sum]: 10 | Stabilizer Syndrome (S1,S0): 10
-\\\
+## Limitations
 
----
-
-## Execution Instructions
-
-### 1. Run Quantum Stabilizer Simulation
-\\\powershell
-python quantum\circuit_quantum_alu.py
-\\\
-
-### 2. Run Verilog Simulation
-Load \lsi/syndrome_decoder.v\ and \lsi/tb_decoder.v\ in Vivado or EDA Playground to generate timing waveforms.
+- Local simulation only (Qiskit Aer); not run on quantum hardware.
+- Only the sum qubit is encoded, and only after the adder. Errors inside the adder or on the carry are not protected.
+- The code corrects single bit-flip (X) errors only, not phase errors.
+- Faults are single deterministic X gates, not a statistical noise model.
+- All inputs are computational basis states.
