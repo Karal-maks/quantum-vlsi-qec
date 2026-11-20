@@ -1,0 +1,25 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  quantum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Verify 32 cases and check committed vectors are current
+        run: |
+          python quantum/circuit_quantum_alu.py --export-vectors
+          git diff --exit-code vlsi/qiskit_vectors.mem
+  verilog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Run self-checking testbench
+        working-directory: vlsi
+        run: |
+          iverilog -g2012 -Wall -o sim syndrome_decoder.v tb_decoder.v
+          vvp -n sim
